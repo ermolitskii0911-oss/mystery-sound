@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mystery Hub со звуком</title>
+    <script src="https://telegram.org"></script>
+    <style>
+        :root { --bg: #0b1030; --panel: #151b46; --accent: #38bdf8; --text: #fff; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: sans-serif; background: var(--bg); color: var(--text); padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        header { width: 100%; max-width: 500px; background: var(--panel); padding: 15px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .balance { color: #fbbf24; font-weight: bold; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; width: 100%; max-width: 500px; }
+        .card { background: var(--panel); padding: 20px; border-radius: 12px; text-align: center; cursor: pointer; border: 1px solid rgba(255,255,255,0.05); }
+        .roulette { background: var(--panel); padding: 20px; border-radius: 12px; width: 100%; max-width: 500px; display: none; text-align: center; margin-bottom: 15px; }
+        .win-box { width: 100%; overflow: hidden; height: 80px; background: rgba(0,0,0,0.3); border-radius: 8px; position: relative; margin: 15px 0; border: 2px solid var(--accent); }
+        .tape { display: flex; position: absolute; left: 0; top: 0; height: 100%; }
+        .item { min-width: 80px; width: 80px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; background: #1e293b; border-right: 1px solid rgba(255,255,255,0.1); }
+        .btn { background: #34d399; color: #000; padding: 10px 20px; border: none; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; font-size: 1.1rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <div><h3 id="name">Загрузка...</h3><div class="balance">💰 <span id="bal">0</span> Stars</div></div>
+    </header>
+    <div class="roulette" id="screen">
+        <h3 id="title">Кейс</h3>
+        <div class="win-box"><div class="tape" id="tape"></div></div>
+        <button class="btn" id="spin-btn" onclick="spin()">Крутить</button>
+    </div>
+    <div class="grid" id="container"></div>
+
+    <script>
+        const tg = window.Telegram?.WebApp;
+        if(tg) { tg.ready(); tg.expand(); }
+        const API = '/api';
+        let activeId = null;
+
+        // Генератор встроенных системных звуков кручения и выигрыша
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            
+            if(type === 'click') { 
+                osc.type = 'triangle'; osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.05);
+            } else if(type === 'win') { 
+                osc.type = 'sine'; osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.3);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+            }
+        }
+
+        async function req(path, body={}) {
+            const r = await fetch(`${API}/${path}`, { method:'POST', headers:{ 'content-type':'application/json', 'x-init-data':tg?.initData||'' }, body:JSON.stringify(body) });
+            const d = await r.json();
+            if(d.state) {
+                document.getElementById('bal').innerText = d.state.bal;
+                document.getElementById('name').innerText = d.name || 'Игрок';
+            }
+            return d;
+        }
+
+        async function init() {
+            const d = await req('state');
+            const c = [
+                {id:'free', name:'Бесплатный', p:0}, {id:'mini', name:'Мини', p:10},
+                {id:'gifts', name:'Подарки', p:25}, {id:'start', name:'Классика', p:50},
+                {id:'gold', name:'Золотой', p:100}, {id:'ton', name:'TON', p:150}
+            ];
+            document.getElementById('container').innerHTML = c.map(x => `
+                <div class="card" onclick="openBox('${x.id}','${x.name}')"><div>${x.name}</div><div style="color:#fbbf24;font-size:0.9rem;margin-top:5px;">${x.p} Stars</div></div>
+            `).join('');
+        }
+
+        function openBox(id, name) {
+            activeId = id;
+            document.getElementById('title').innerText = name;
+            document.getElementById('screen').style.display = 'block';
+            const tape = document.getElementById('tape');
+            tape.style.transition = 'none'; tape.style.transform = 'translateX(0px)';
+            tape.innerHTML = Array(20).fill('<div class="item">❓</div>').join('');
+        }
+
+        async function spin() {
+            document.getElementById('spin-btn').disabled = true;
+            const res = await req('spin', { c: activeId });
+            if(!res || res.error) { document.getElementById('spin-btn').disabled = false; return; }
+
+            const tape = document.getElementById('tape');
+            let html = '';
+            for(let i=0; i<30; i++) {
+                html += `<div class="item">${i === 25 ? (res.k === 'empty' ? '💨' : '🎁') : '❓'}</div>`;
+            }
+            tape.innerHTML = html;
+
+            let clicks = 0;
+            const interval = setInterval(() => { if(clicks < 25) { playSound('click'); clicks++; } else { clearInterval(interval); } }, 120);
+
+            setTimeout(() => {
+                tape.style.transition = 'transform 3s cubic-bezier(0.1, 0.8, 0.1, 1)';
+                tape.style.transform = `translateX(${-25 * 80 + 210}px)`;
+            }, 50);
+
+            setTimeout(() => {
+                playSound('win'); 
+                alert(`Выпало: ${res.k === 'empty' ? 'Ничего' : res.k}`);
+                document.getElementById('spin-btn').disabled = false;
+            }, 3200);
+        }
+        init();
+    </script>
+</body>
+</html>
